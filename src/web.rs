@@ -263,9 +263,40 @@ struct RawError {
 #[derive(Deserialize)]
 struct RawErrorBody {
     #[serde(default)]
-    status: u16,
-    #[serde(default)]
     message: String,
+}
+
+/// An HTTP-level failure from the Web API, so callers can react to specific codes.
+#[derive(Debug, Clone)]
+pub struct ApiError {
+    pub status: u16,
+    pub message: String,
+    pub what: String,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.what, self.message)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+impl ApiError {
+    pub fn no_device(&self) -> bool {
+        self.status == 404 && self.message.to_lowercase().contains("device")
+    }
+    pub fn premium_required(&self) -> bool {
+        self.status == 403 && self.message.to_lowercase().contains("premium")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub is_active: bool,
 }
 
 // ---- client ----------------------------------------------------------------
@@ -291,28 +322,19 @@ impl WebApi {
     fn check(&self, mut resp: ureq::http::Response<ureq::Body>, what: &str) -> Result<Option<String>> {
         let status = resp.status().as_u16();
         let text = resp.body_mut().read_to_string().unwrap_or_default();
-        match status {
-            200..=299 => Ok(if text.trim().is_empty() { None } else { Some(text) }),
-            401 => bail!("Spotify rejected the token (run `aura login` again)"),
-            403 => {
-                let msg = serde_json::from_str::<RawError>(&text).map(|e| e.error.message).unwrap_or_default();
-                if msg.to_lowercase().contains("premium") {
-                    bail!("{what}: Spotify Premium is required for this action")
-                }
-                bail!("{what}: forbidden ({})", if msg.is_empty() { "403".into() } else { msg })
-            }
-            404 => {
-                let msg = serde_json::from_str::<RawError>(&text).map(|e| e.error.message).unwrap_or_default();
-                bail!("{what}: {}", if msg.is_empty() { "not found".into() } else { msg })
-            }
-            429 => bail!("{what}: rate limited by Spotify, try again in a moment"),
-            _ => {
-                let msg = serde_json::from_str::<RawError>(&text)
-                    .map(|e| format!("{} ({})", e.error.message, e.error.status))
-                    .unwrap_or_else(|_| format!("HTTP {status}"));
-                bail!("{what}: {msg}")
-            }
+        if (200..300).contains(&status) {
+            return Ok(if text.trim().is_empty() { None } else { Some(text) });
         }
+        let msg = serde_json::from_str::<RawError>(&text).map(|e| e.error.message).unwrap_or_default();
+        let message = match status {
+            401 => "Spotify rejected the token (run `aura login` again)".to_string(),
+            403 if msg.to_lowercase().contains("premium") => "Spotify Premium is required for this".to_string(),
+            403 => format!("forbidden{}", if msg.is_empty() { String::new() } else { format!(" ({msg})") }),
+            404 => if msg.is_empty() { "not found".to_string() } else { msg },
+            429 => "rate limited by Spotify, try again in a moment".to_string(),
+            _ => if msg.is_empty() { format!("HTTP {status}") } else { format!("{msg} (HTTP {status})") },
+        };
+        Err(ApiError { status, message, what: what.to_string() }.into())
     }
 
     fn get(&self, path: &str, query: &[(&str, &str)], what: &str) -> Result<String> {
@@ -537,8 +559,90 @@ impl WebApi {
         Ok(page.items.into_iter().flatten().filter_map(|t| t.into_item()).collect())
     }
 
-    pub fn add_to_queue(&self, uri: &str) -> Result<()> {
-        self.send("POST", "/me/player/queue", &[("uri", uri)], None, "queue")
+    pub fn devices(&self) -> Result<Vec<Device>> {
+        let text = self.get("/me/player/devices", &[], "devices")?;
+        let v: serde_json::Value = serde_json::from_str(&text)?;
+        Ok(v.get("devices")
+            .and_then(|d| d.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|d| {
+                        Some(Device {
+                            id: d.get("id")?.as_str()?.to_string(),
+                            name: d.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            kind: d.get("type").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            is_active: d.get("is_active").and_then(|x| x.as_bool()).unwrap_or(false),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Start playback: a context (album/playlist/artist) optionally offset to a track,
+    /// or an explicit list of track URIs.
+    pub fn play(&self, device_id: Option<&str>, context_uri: Option<&str>, uris: &[String], offset_uri: Option<&str>) -> Result<()> {
+        let mut body = serde_json::Map::new();
+        if let Some(c) = context_uri {
+            body.insert("context_uri".into(), c.into());
+            if let Some(o) = offset_uri {
+                body.insert("offset".into(), serde_json::json!({ "uri": o }));
+            }
+        } else if !uris.is_empty() {
+            body.insert("uris".into(), serde_json::json!(uris));
+        }
+        let q: Vec<(&str, &str)> = device_id.map(|d| vec![("device_id", d)]).unwrap_or_default();
+        self.send("PUT", "/me/player/play", &q, Some(serde_json::Value::Object(body)), "play")
+    }
+
+    pub fn add_to_queue(&self, device_id: Option<&str>, uri: &str) -> Result<()> {
+        let mut q = vec![("uri", uri)];
+        if let Some(d) = device_id {
+            q.push(("device_id", d));
+        }
+        self.send("POST", "/me/player/queue", &q, None, "queue")
+    }
+
+    /// Find a device to play on without bringing any window forward: the active one,
+    /// else this computer's Spotify app (launched hidden if it is not running).
+    pub fn ensure_device(&self) -> Result<String> {
+        let pick = |devs: &[Device]| -> Option<String> {
+            devs.iter()
+                .find(|d| d.is_active)
+                .or_else(|| devs.iter().find(|d| d.kind.eq_ignore_ascii_case("computer")))
+                .or_else(|| devs.first())
+                .map(|d| d.id.clone())
+        };
+        if let Some(id) = pick(&self.devices()?) {
+            return Ok(id);
+        }
+        // Nothing to play on: start the desktop app in the background, hidden.
+        let _ = std::process::Command::new("open").args(["-g", "-j", "-a", "Spotify"]).status();
+        for _ in 0..12 {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            if let Some(id) = pick(&self.devices()?) {
+                return Ok(id);
+            }
+        }
+        bail!("no Spotify device is available to play on")
+    }
+
+    /// Run a player action, retrying on the chosen device when Spotify reports none.
+    pub fn with_device<F>(&self, f: F) -> Result<()>
+    where
+        F: Fn(Option<&str>) -> Result<()>,
+    {
+        match f(None) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let retry = e.downcast_ref::<ApiError>().map(|a| a.no_device()).unwrap_or(false);
+                if !retry {
+                    return Err(e);
+                }
+                let id = self.ensure_device()?;
+                f(Some(&id))
+            }
+        }
     }
 
     pub fn library_contains(&self, track_uri: &str) -> Result<bool> {

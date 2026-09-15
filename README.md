@@ -52,7 +52,7 @@ aura login --client-id <CLIENT_ID>
 
 Your browser opens once to approve access. Tokens are stored in `~/.config/aura/auth.json` (owner-only permissions) and refreshed automatically. `aura logout` forgets them.
 
-Inside the browser panel: `enter` plays a song or opens a playlist/album/artist, `p` plays a whole playlist or album, `a` adds a song to the queue, `←` goes back, `tab` switches sections, `esc` closes. Songs opened from a playlist keep playing that playlist afterwards.
+Inside the browser panel: `enter` plays a song or opens a playlist/album/artist, `a` (or `+`) adds a song to the queue, `p` plays a whole playlist or album, `←` goes back, `tab` switches sections, `esc` closes. The panel stays open so you can keep queueing. Songs opened from a playlist keep playing that playlist afterwards. Playback starts through the Web API, so the Spotify window never comes to the front; if nothing is playing anywhere, aura starts the desktop app hidden in the background.
 
 ## Keys
 
@@ -96,11 +96,12 @@ aura volume 40
 aura open https://open.spotify.com/track/…   # or spotify:track:…
 aura search daft punk  # JSON results (needs aura login)
 aura playlists         # JSON list of your playlists (needs aura login)
+aura devices           # JSON list of Spotify Connect devices (needs aura login)
 ```
 
 ## How it works
 
-Playback state comes from the Spotify app's scripting interface (JavaScript for Automation, one process per poll). Track and play-state changes arrive through a small Swift helper that subscribes to Spotify's `PlaybackStateChanged` notification, so the UI reacts immediately instead of waiting for the next poll. Artwork is fetched once per album and cached under `~/Library/Caches/aura`, along with lyrics lookups. Colors are extracted with a small k-means pass over the art; image resizing and encoding happen on a worker thread so the UI never stalls. Search and library data come from the Web API (PKCE OAuth, no client secret) and playback of anything you pick goes back through the desktop app, so it works on whatever device Spotify is already playing on.
+Playback state comes from the Spotify app's scripting interface (JavaScript for Automation, one process per poll). Track and play-state changes arrive through a small Swift helper that subscribes to Spotify's `PlaybackStateChanged` notification, so the UI reacts immediately instead of waiting for the next poll. Artwork is fetched once per album and cached under `~/Library/Caches/aura`, along with lyrics lookups. Colors are extracted with a small k-means pass over the art; image resizing and encoding happen on a worker thread so the UI never stalls. Search and library data come from the Web API (PKCE OAuth, no client secret). Anything you pick plays through the Web API on the active device (or this Mac's Spotify app, launched hidden if needed), falling back to AppleScript only when the API refuses.
 
 ## Debugging
 

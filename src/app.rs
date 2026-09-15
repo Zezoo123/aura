@@ -1009,8 +1009,19 @@ impl App {
     fn open_row(&mut self, row: Row) {
         match row {
             Row::Track(t, ctx) => {
-                self.play_track(&t, ctx.as_deref());
-                self.close_browser();
+                // Without a context, play this track followed by the rest of the list.
+                let following: Vec<String> = if ctx.is_some() {
+                    Vec::new()
+                } else {
+                    self.browser
+                        .rows()
+                        .into_iter()
+                        .skip(self.browser.selected)
+                        .filter_map(|r| if let Row::Track(t, _) = r { Some(t.uri) } else { None })
+                        .take(50)
+                        .collect()
+                };
+                self.play_track(&t, ctx.as_deref(), following);
             }
             Row::Playlist(p) => {
                 let title = p.name.clone();
@@ -1038,15 +1049,54 @@ impl App {
         }
     }
 
-    fn play_track(&mut self, t: &TrackItem, context: Option<&str>) {
-        match context {
-            Some(c) => self.command(Command::PlayInContext(t.uri.clone(), c.to_string())),
-            None => self.command(Command::PlayUri(t.uri.clone())),
-        }
+    fn play_track(&mut self, t: &TrackItem, context: Option<&str>, following: Vec<String>) {
         self.toast(format!("▶ {} · {}", t.name, t.artists));
+        self.last_cmd_at = Instant::now();
+        let uri = t.uri.clone();
+        let ctx = context.map(|c| c.to_string());
+        let uris = if following.is_empty() { vec![uri.clone()] } else { following };
+        self.player_action(
+            move |web| web.with_device(|dev| web.play(dev, ctx.as_deref(), &uris, Some(&uri))),
+            match context {
+                Some(c) => Command::PlayInContext(t.uri.clone(), c.to_string()),
+                None => Command::PlayUri(t.uri.clone()),
+            },
+        );
     }
 
-    /// Play a whole context (playlist / album) from the top.
+    /// Run a playback action through the Web API on a thread (it never raises the
+    /// Spotify window); fall back to AppleScript only when the API cannot do it.
+    fn player_action<F>(&mut self, via_web: F, fallback: Command)
+    where
+        F: FnOnce(&WebApi) -> anyhow::Result<()> + Send + 'static,
+    {
+        let web = self.web.clone();
+        let spotify = self.spotify.clone();
+        let tx = self.msg_tx.clone();
+        thread::spawn(move || {
+            let result = match &web {
+                Some(w) => via_web(w),
+                None => Err(anyhow::anyhow!("not connected")),
+            };
+            if let Err(e) = result {
+                let premium = e
+                    .downcast_ref::<crate::web::ApiError>()
+                    .map(|a| a.premium_required())
+                    .unwrap_or(false);
+                crate::debug(format!("web playback failed ({e:#}); falling back to AppleScript"));
+                if premium {
+                    let _ = tx.send(Msg::Error("Spotify Premium is needed to start playback from here; using the desktop app instead".into()));
+                }
+                spotify.run(fallback);
+            } else {
+                // Give Spotify a moment to switch, then refresh the display.
+                thread::sleep(Duration::from_millis(350));
+                spotify.poke();
+            }
+        });
+    }
+
+    /// Play a whole context (playlist / album / artist) from the top.
     fn play_context(&mut self, row: &Row) {
         let (uri, name) = match row {
             Row::Playlist(p) => (p.uri.clone(), p.name.clone()),
@@ -1054,15 +1104,18 @@ impl App {
             Row::Artist(a) => (a.uri.clone(), a.name.clone()),
             Row::Track(t, ctx) => {
                 let t = t.clone();
-                self.play_track(&t, ctx.as_deref());
-                self.close_browser();
+                self.play_track(&t, ctx.as_deref(), Vec::new());
                 return;
             }
             _ => return,
         };
-        self.command(Command::PlayUri(uri));
         self.toast(format!("▶ {name}"));
-        self.close_browser();
+        self.last_cmd_at = Instant::now();
+        let ctx = uri.clone();
+        self.player_action(
+            move |web| web.with_device(|dev| web.play(dev, Some(&ctx), &[], None)),
+            Command::PlayUri(uri),
+        );
     }
 
     fn queue_row(&mut self, row: &Row) {
@@ -1070,12 +1123,15 @@ impl App {
             self.toast("only songs can be queued");
             return;
         };
-        let Some(web) = self.web.clone() else { return };
+        let Some(web) = self.web.clone() else {
+            self.toast("connect Spotify to use the queue");
+            return;
+        };
         let t = t.clone();
         let tx = self.msg_tx.clone();
-        self.toast(format!("queued · {}", t.name));
+        self.toast(format!("+ queued · {}", t.name));
         thread::spawn(move || {
-            if let Err(e) = web.add_to_queue(&t.uri) {
+            if let Err(e) = web.with_device(|dev| web.add_to_queue(dev, &t.uri)) {
                 let _ = tx.send(Msg::Error(format!("{e:#}")));
             }
         });
@@ -1202,7 +1258,7 @@ impl App {
                             self.play_context(&row);
                         }
                     }
-                    'a' => {
+                    'a' | '+' => {
                         if let Some(row) = self.browser.selected_row() {
                             self.queue_row(&row);
                         }

@@ -87,6 +87,8 @@ enum Sub {
     Search { query: Vec<String> },
     /// List your playlists as JSON (needs `aura login`).
     Playlists,
+    /// List Spotify Connect devices as JSON (needs `aura login`).
+    Devices,
     /// Toggle play / pause.
     Toggle,
     Play,
@@ -346,6 +348,16 @@ fn run_sub(sub: Sub) -> Result<()> {
                 "artists": r.artists.iter().map(|a| serde_json::json!({"uri": a.uri, "name": a.name})).collect::<Vec<_>>(),
                 "playlists": r.playlists.iter().map(|p| serde_json::json!({"uri": p.uri, "name": p.name, "owner": p.owner, "tracks": p.total})).collect::<Vec<_>>(),
             });
+            println!("{}", serde_json::to_string_pretty(&json)?);
+            return Ok(());
+        }
+        Sub::Devices => {
+            let web = web_client()?;
+            let list = web.devices()?;
+            let json: Vec<_> = list
+                .iter()
+                .map(|d| serde_json::json!({"id": d.id, "name": d.name, "type": d.kind, "active": d.is_active}))
+                .collect();
             println!("{}", serde_json::to_string_pretty(&json)?);
             return Ok(());
         }
