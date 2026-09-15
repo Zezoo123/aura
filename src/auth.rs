@@ -119,7 +119,7 @@ fn urldecode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'%' if i + 2 < bytes.len() + 0 && i + 2 <= bytes.len() - 1 => {
+            b'%' if i + 2 < bytes.len() => {
                 if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
                     out.push(v);
                     i += 3;
@@ -292,5 +292,35 @@ impl TokenStore {
             *t = fresh;
         }
         Ok(t.access_token.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64url_matches_rfc4648_no_padding() {
+        assert_eq!(base64url(b""), "");
+        assert_eq!(base64url(b"f"), "Zg");
+        assert_eq!(base64url(b"fo"), "Zm8");
+        assert_eq!(base64url(b"foo"), "Zm9v");
+        assert_eq!(base64url(&[0xfb, 0xff]), "-_8");
+    }
+
+    #[test]
+    fn url_encoding_round_trips() {
+        let s = "a b&c=d/é";
+        let enc = urlencode(s);
+        assert_eq!(enc, "a%20b%26c%3Dd%2F%C3%A9");
+        assert_eq!(urldecode(&enc), s);
+        assert_eq!(urldecode("x+y%2"), "x y%2");
+    }
+
+    #[test]
+    fn pkce_challenge_is_sha256_of_verifier() {
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let challenge = base64url(&Sha256::digest(verifier.as_bytes()));
+        assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
     }
 }

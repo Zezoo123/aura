@@ -552,3 +552,77 @@ impl WebApi {
         self.send(method, "/me/library", &[("uris", track_uri)], None, "library")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_parses_all_types_and_skips_null_items() {
+        let json = r#"{
+          "tracks": {"items": [
+            {"id":"t1","uri":"spotify:track:t1","name":"Song","type":"track","duration_ms":181000,
+             "artists":[{"name":"A"},{"name":"B"}],
+             "album":{"name":"Album","images":[{"url":"big","width":640},{"url":"mid","width":300},{"url":"small","width":64}]}},
+            null
+          ], "next": null, "total": 1},
+          "albums": {"items": [{"id":"a1","uri":"spotify:album:a1","name":"Album","artists":[{"name":"A"}],
+             "images":[{"url":"x","width":300}],"release_date":"2024-05-01","total_tracks":12}], "total": 1},
+          "artists": {"items": [{"id":"ar1","uri":"spotify:artist:ar1","name":"A","images":[]}], "total": 1},
+          "playlists": {"items": [{"id":"p1","uri":"spotify:playlist:p1","name":"Mix","owner":{"display_name":"me"},
+             "images":[{"url":"y","width":null}],"items":{"total":42}}, null], "total": 1}
+        }"#;
+        let raw: RawSearch = serde_json::from_str(json).unwrap();
+        let tracks: Vec<TrackItem> = raw.tracks.unwrap().items.into_iter().flatten().filter_map(|t| t.into_item()).collect();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].artists, "A, B");
+        assert_eq!(tracks[0].art_url.as_deref(), Some("mid"));
+        let albums = raw.albums.unwrap().items;
+        assert_eq!(albums.len(), 1);
+        let a = albums.into_iter().flatten().next().unwrap();
+        assert_eq!(a.release_date.chars().take(4).collect::<String>(), "2024");
+        let playlists: Vec<PlaylistItem> = raw.playlists.unwrap().items.into_iter().flatten().map(|p| p.into_item()).collect();
+        assert_eq!(playlists.len(), 1);
+        assert_eq!(playlists[0].total, 42);
+        assert_eq!(playlists[0].owner, "me");
+        assert_eq!(playlists[0].art_url.as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn playlist_items_use_item_field_with_track_fallback() {
+        let json = r#"{"items":[
+            {"added_at":"2024-01-01T00:00:00Z","is_local":false,
+             "item":{"id":"t1","uri":"spotify:track:t1","name":"New shape","type":"track","duration_ms":1000,"artists":[{"name":"A"}],"album":{"name":"X","images":[]}}},
+            {"track":{"id":"t2","uri":"spotify:track:t2","name":"Old shape","type":"track","duration_ms":1000,"artists":[],"album":{"name":"X","images":[]}}},
+            {"item":{"id":"e1","uri":"spotify:episode:e1","name":"Podcast","type":"episode","duration_ms":1000}},
+            {"item":null}
+        ],"next":null,"total":4}"#;
+        let page: Page<RawPlaylistEntry> = serde_json::from_str(json).unwrap();
+        let tracks: Vec<TrackItem> = page
+            .items
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.item.or(e.track))
+            .filter_map(|t| t.into_item())
+            .collect();
+        let names: Vec<&str> = tracks.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["New shape", "Old shape"]);
+    }
+
+    #[test]
+    fn playlists_page_prefers_items_total_over_deprecated_tracks() {
+        let json = r#"{"items":[{"id":"p","uri":"spotify:playlist:p","name":"P","tracks":{"total":5}}],"next":null,"total":1}"#;
+        let page: Page<RawPlaylist> = serde_json::from_str(json).unwrap();
+        let p = page.items.into_iter().flatten().next().unwrap().into_item();
+        assert_eq!(p.total, 5);
+        assert_eq!(p.owner, "");
+    }
+
+    #[test]
+    fn queue_and_error_shapes() {
+        let q: RawQueue = serde_json::from_str(r#"{"currently_playing":null,"queue":[{"id":"t","uri":"spotify:track:t","name":"N","type":"track"}]}"#).unwrap();
+        assert_eq!(q.queue.len(), 1);
+        let e: RawError = serde_json::from_str(r#"{"error":{"status":403,"message":"Player command failed: Premium required"}}"#).unwrap();
+        assert!(e.error.message.contains("Premium"));
+    }
+}

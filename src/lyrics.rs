@@ -213,3 +213,31 @@ pub fn lookup(agent: &ureq::Agent, track: &Track) -> Result<Option<Lyrics>> {
     }
     Ok(found)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_lrc_timestamps_and_multi_tag_lines() {
+        let src = "[00:09.80] first\n[00:12.08][00:40.5] twice\n\n[01:02.123] third\nnot a tag\n";
+        let lines = parse_lrc(src);
+        let got: Vec<(u64, &str)> = lines.iter().map(|l| (l.at_ms, l.text.as_str())).collect();
+        assert_eq!(got, vec![(9800, "first"), (12080, "twice"), (40500, "twice"), (62123, "third")]);
+    }
+
+    #[test]
+    fn index_at_returns_last_started_line() {
+        let l = Lyrics { synced: parse_lrc("[00:01.00] a\n[00:05.00] b\n"), ..Default::default() };
+        assert_eq!(l.index_at(500), None);
+        assert_eq!(l.index_at(1000), Some(0));
+        assert_eq!(l.index_at(4999), Some(0));
+        assert_eq!(l.index_at(60_000), Some(1));
+    }
+
+    #[test]
+    fn cleans_titles_and_artists() {
+        assert_eq!(clean_title("Song (feat. X) - Remastered 2011"), "Song");
+        assert_eq!(primary_artist("A, B, C"), "A");
+    }
+}

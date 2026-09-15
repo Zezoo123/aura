@@ -434,3 +434,37 @@ fn run_helper(poke: mpsc::Sender<Job>, out: mpsc::Sender<Msg>) -> Result<()> {
     }
     Err(anyhow!("helper exited ({status})"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_state_json() {
+        let raw = r#"{"running":true,"state":"playing","position":12.5,"volume":43,"shuffle":true,"repeat":false,
+            "track":{"id":"spotify:track:x","name":"N","artist":"A","album":"B","album_artist":"A","duration":178928,
+                     "artwork_url":"https://i.scdn.co/image/abc","track_number":1,"popularity":70}}"#;
+        let s = parse_snapshot(raw, Instant::now()).unwrap();
+        assert_eq!(s.state, PlayerState::Playing);
+        assert_eq!(s.position_ms, 12500);
+        assert_eq!(s.volume, 43);
+        let t = s.track.unwrap();
+        assert_eq!(t.duration_ms, 178928);
+        assert_eq!(t.web_url(), "https://open.spotify.com/track/x");
+        let off = parse_snapshot(r#"{"running":false}"#, Instant::now()).unwrap();
+        assert!(!off.running);
+    }
+
+    #[test]
+    fn converts_links_to_uris() {
+        assert_eq!(to_uri("https://open.spotify.com/track/abc?si=1"), "spotify:track:abc");
+        assert_eq!(to_uri("https://open.spotify.com/intl-de/album/xyz"), "spotify:album:xyz");
+        assert_eq!(to_uri("spotify:playlist:p"), "spotify:playlist:p");
+    }
+
+    #[test]
+    fn command_scripts_escape_quotes() {
+        let s = Command::PlayInContext("spotify:track:a\"b".into(), "spotify:playlist:c".into()).script();
+        assert_eq!(s, "tell application \"Spotify\" to play track \"spotify:track:ab\" in context \"spotify:playlist:c\"");
+    }
+}
