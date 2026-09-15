@@ -28,7 +28,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     fill_background(buf, area, app, &theme);
 
-    if !app.snap.running {
+    let overlay = app.browser.open || app.help;
+    if overlay {
+        // Modal: keep only the chrome underneath. Drawing the art here would leave
+        // image fragments behind on iTerm2 and lyrics would poke out around the panel.
+        draw_header(buf, Rect::new(area.x, area.y, area.width, 1), app, &theme);
+        if app.snap.running && app.snap.track.is_some() && area.height > 8 {
+            let y = area.bottom() - 3;
+            draw_progress(buf, Rect::new(area.x + 3, y, area.width.saturating_sub(6), 1), app, &theme);
+            draw_controls(buf, Rect::new(area.x, y + 1, area.width, 1), app, &theme);
+        }
+    } else if !app.snap.running {
         draw_message(buf, area, &theme, "Spotify isn't running", "press enter to launch it · q to quit");
         app.hit.buttons.push((area, Action::Launch));
     } else if app.snap.track.is_none() {
@@ -823,8 +833,8 @@ pub fn draw_browser(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) 
     use crate::browser::{Focus, Row, Tab};
 
     let w = area.width.saturating_sub(6).min(110).max(30);
-    let h = area.height.saturating_sub(4).min(36).max(10);
-    let r = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    let h = area.height.saturating_sub(6).min(36).max(8);
+    let r = Rect::new(area.x + (area.width - w) / 2, area.y + 2, w, h);
     app.hit.browser_panel = Some(r);
     fill_rect(buf, r, Style::default().bg(theme.bg.color()).fg(theme.text.color()));
     draw_frame(buf, r, st(theme.accent));
