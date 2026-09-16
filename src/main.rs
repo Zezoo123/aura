@@ -411,7 +411,25 @@ fn run_sub(sub: Sub) -> Result<()> {
         Sub::Prev => Command::Prev,
         Sub::Seek { seconds } => Command::Seek((seconds.max(0.0) * 1000.0) as u64),
         Sub::Volume { level } => Command::SetVolume(level.min(100)),
-        Sub::Open { uri } => Command::PlayUri(spotify::to_uri(&uri)),
+        Sub::Open { uri } => {
+            let uri = spotify::to_uri(&uri);
+            // Prefer the Web API (does not raise the Spotify window); fall back to AppleScript.
+            if let Ok(web) = web_client() {
+                let is_track = uri.starts_with("spotify:track:");
+                let r = web.with_device(|dev| {
+                    if is_track {
+                        web.play(dev, None, std::slice::from_ref(&uri), None)
+                    } else {
+                        web.play(dev, Some(&uri), &[], None)
+                    }
+                });
+                if r.is_ok() {
+                    return Ok(());
+                }
+                eprintln!("warning: Web API playback failed ({:#}); using the desktop app", r.unwrap_err());
+            }
+            Command::PlayUri(uri)
+        }
     };
     spotify::osascript(&command_script(&cmd))?;
     Ok(())

@@ -3,7 +3,7 @@
 A now-playing display for Spotify that lives in your terminal.
 
 <p align="center">
-  <img src="docs/screens/split.png" alt="aura split layout: album art, synced lyrics, art-derived colors" width="900">
+  <img src="docs/screens/demo.gif" alt="aura demo: search a song, play it, colors follow the album art" width="900">
 </p>
 
 - **Real album art** using your terminal's native graphics (iTerm2, Kitty, WezTerm, Ghostty, Sixel), with a half-block fallback everywhere else.
@@ -30,13 +30,15 @@ Then run `aura` in a terminal with graphics support (iTerm2, Kitty, WezTerm, Gho
 
 ## Screens
 
-| Cover | Lyrics |
-| --- | --- |
-| ![cover layout](docs/screens/cover.png) | ![lyrics layout](docs/screens/lyrics.png) |
+Every screen is colored from whatever album is playing.
 
-| Search & browse | Help |
+| Cover | Split |
 | --- | --- |
-| ![browser](docs/screens/browser.png) | ![help](docs/screens/help.png) |
+| ![cover layout](docs/screens/cover.png) | ![split layout](docs/screens/split.png) |
+
+| Lyrics | Search & browse |
+| --- | --- |
+| ![lyrics layout](docs/screens/lyrics.png) | ![browser](docs/screens/browser.png) |
 
 ## Search, playlists, liked songs
 
