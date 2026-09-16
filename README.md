@@ -17,7 +17,13 @@ A now-playing display for Spotify that lives in your terminal.
 
 ## Install
 
-Requires macOS with the Spotify desktop app, and a Rust toolchain (`brew install rust`).
+Requires macOS with the Spotify desktop app.
+
+```bash
+brew install Zezoo123/tap/aura
+```
+
+Or grab the binary from the [latest release](https://github.com/Zezoo123/aura/releases/latest) (Apple Silicon), or build from source with a Rust toolchain (`brew install rust`):
 
 ```bash
 git clone https://github.com/Zezoo123/aura && cd aura
