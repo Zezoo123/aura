@@ -52,7 +52,7 @@ aura login --client-id <CLIENT_ID>
 
 Your browser opens once to approve access. Tokens are stored in `~/.config/aura/auth.json` (owner-only permissions) and refreshed automatically. `aura logout` forgets them.
 
-Inside the browser panel: `enter` plays a song or opens a playlist/album/artist, `a` (or `+`) adds a song to the queue, `p` plays a whole playlist or album, `←` goes back, `tab` switches sections, `esc` closes. The panel stays open so you can keep queueing. Songs opened from a playlist keep playing that playlist afterwards. Playback starts through the Web API, so the Spotify window never comes to the front; if nothing is playing anywhere, aura starts the desktop app hidden in the background.
+Inside the browser panel: `enter` plays a song or opens a playlist/album/artist, `a` (or `+`) adds a song to the queue, `p` plays a whole playlist or album, `←` goes back, `tab` switches sections, `esc` closes. Playing returns you to the player; queueing keeps the panel open so you can add more. Songs opened from a playlist keep playing that playlist afterwards. Playback starts through the Web API, so the Spotify window never comes to the front; if nothing is playing anywhere, aura starts the desktop app hidden in the background.
 
 ## Keys
 

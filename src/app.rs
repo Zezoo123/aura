@@ -1022,6 +1022,7 @@ impl App {
                         .collect()
                 };
                 self.play_track(&t, ctx.as_deref(), following);
+                self.close_browser();
             }
             Row::Playlist(p) => {
                 let title = p.name.clone();
@@ -1105,10 +1106,12 @@ impl App {
             Row::Track(t, ctx) => {
                 let t = t.clone();
                 self.play_track(&t, ctx.as_deref(), Vec::new());
+                self.close_browser();
                 return;
             }
             _ => return,
         };
+        self.close_browser();
         self.toast(format!("▶ {name}"));
         self.last_cmd_at = Instant::now();
         let ctx = uri.clone();

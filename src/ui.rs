@@ -1039,7 +1039,7 @@ pub fn draw_browser(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) 
     // ---- footer
     let hint = match app.browser.tab {
         Tab::Search if app.browser.focus == Focus::Input => "enter search · ↓ results · tab switch · esc close",
-        _ => "enter play · a add to queue · p play all · ← back · tab switch · esc close",
+        _ => "enter play · a queue (stays here) · p play all · ← back · tab switch · esc close",
     };
     put(buf, inner.x, footer_y, &fit(hint, inner.width as usize), st(theme.dim), inner.width);
 }
