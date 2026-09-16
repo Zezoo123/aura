@@ -1,4 +1,4 @@
-//! aura: a now-playing display for Spotify that lives in your terminal.
+//! aura: a now-playing display for Spotify and Apple Music that lives in your terminal.
 
 mod app;
 mod art;
@@ -6,6 +6,8 @@ mod auth;
 mod browser;
 mod config;
 mod lyrics;
+mod music;
+mod player;
 mod spotify;
 mod theme;
 mod ui;
@@ -31,13 +33,17 @@ use ratatui_image::picker::{cap_parser::QueryStdioOptions, Picker, ProtocolType}
 
 use app::{App, Layout, Msg, Options};
 use config::Config;
-use spotify::{Command, Spotify};
+use player::{Command, Player, PlayerState, Service};
 
 #[derive(Parser, Debug)]
-#[command(name = "aura", version, about = "Album art, adaptive colors and synced lyrics for Spotify, in your terminal.")]
+#[command(name = "aura", version, about = "Album art, adaptive colors and synced lyrics for Spotify and Apple Music, in your terminal.")]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Sub>,
+
+    /// Pin the player to show (spotify | music). Default: whichever is playing.
+    #[arg(long, global = true)]
+    service: Option<String>,
 
     /// Start in a specific layout (default adapts to the window size).
     #[arg(long, value_enum)]
@@ -128,7 +134,11 @@ pub fn cache_dir() -> Result<PathBuf> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     if let Some(sub) = cli.cmd {
-        return run_sub(sub);
+        let forced = match cli.service.as_deref() {
+            Some(s) => Some(Service::parse(s).ok_or_else(|| anyhow!("unknown service {s:?} (use spotify or music)"))?),
+            None => None,
+        };
+        return run_sub(sub, forced);
     }
     let config = Config::load().unwrap_or_else(|e| {
         eprintln!("warning: {e:#}");
@@ -191,13 +201,18 @@ fn main() -> Result<()> {
             })?;
     }
 
-    let spotify = Spotify::start(tx.clone(), Duration::from_millis(cli.poll_ms.max(250)));
+    let service = match cli.service.as_deref() {
+        Some(s) => Some(Service::parse(s).ok_or_else(|| anyhow!("unknown service {s:?} (use spotify or music)"))?),
+        None => None,
+    };
+    let player = Player::start(tx.clone(), Duration::from_millis(cli.poll_ms.max(250)));
     let mut app = App::new(
-        spotify,
+        player,
         picker,
         tx.clone(),
         resize_tx,
         Options {
+            service,
             layout: cli.layout.map(|l| match l {
                 LayoutArg::Cover => Layout::Cover,
                 LayoutArg::Split => Layout::Split,
@@ -303,7 +318,36 @@ fn web_client() -> Result<web::WebApi> {
     Ok(web::WebApi::new(auth::TokenStore::new(tokens), config.market))
 }
 
-fn run_sub(sub: Sub) -> Result<()> {
+fn snapshot_json(s: &player::Snapshot) -> serde_json::Value {
+    serde_json::json!({
+        "service": s.service.name(),
+        "running": s.running,
+        "state": match s.state {
+            PlayerState::Playing => "playing",
+            PlayerState::Paused => "paused",
+            PlayerState::Stopped => "stopped",
+        },
+        "position_ms": s.position_ms,
+        "volume": s.volume,
+        "shuffle": s.shuffle,
+        "repeat": s.repeat,
+        "track": s.track.as_ref().map(|t| serde_json::json!({
+            "id": t.id,
+            "url": t.url,
+            "name": t.name,
+            "artist": t.artist,
+            "album": t.album,
+            "album_artist": t.album_artist,
+            "duration_ms": t.duration_ms,
+            "artwork_url": match &t.art { player::ArtRef::Url(u) => Some(u.clone()), _ => None },
+            "track_number": t.track_number,
+            "popularity": t.popularity,
+            "liked": t.liked,
+        })),
+    })
+}
+
+fn run_sub(sub: Sub, forced: Option<Service>) -> Result<()> {
     let cmd = match sub {
         Sub::Login { client_id, port } => {
             let mut config = Config::load()?;
@@ -372,30 +416,12 @@ fn run_sub(sub: Sub) -> Result<()> {
             return Ok(());
         }
         Sub::Status => {
-            let s = spotify::poll()?;
-            let json = serde_json::json!({
-                "running": s.running,
-                "state": match s.state {
-                    spotify::PlayerState::Playing => "playing",
-                    spotify::PlayerState::Paused => "paused",
-                    spotify::PlayerState::Stopped => "stopped",
-                },
-                "position_ms": s.position_ms,
-                "volume": s.volume,
-                "shuffle": s.shuffle,
-                "repeat": s.repeat,
-                "track": s.track.as_ref().map(|t| serde_json::json!({
-                    "id": t.id,
-                    "url": t.web_url(),
-                    "name": t.name,
-                    "artist": t.artist,
-                    "album": t.album,
-                    "album_artist": t.album_artist,
-                    "duration_ms": t.duration_ms,
-                    "artwork_url": t.artwork_url,
-                    "track_number": t.track_number,
-                    "popularity": t.popularity,
-                })),
+            let p = player::poll()?;
+            let active = p.choose(Service::Spotify, forced);
+            let mut json = snapshot_json(p.get(active));
+            json["players"] = serde_json::json!({
+                "spotify": snapshot_json(&p.spotify),
+                "music": snapshot_json(&p.music),
             });
             println!("{}", serde_json::to_string_pretty(&json)?);
             return Ok(());
@@ -413,6 +439,10 @@ fn run_sub(sub: Sub) -> Result<()> {
         Sub::Volume { level } => Command::SetVolume(level.min(100)),
         Sub::Open { uri } => {
             let uri = spotify::to_uri(&uri);
+            if uri.starts_with("music:") {
+                player::osascript(&player::script_for(Service::AppleMusic, &Command::PlayUri(uri)))?;
+                return Ok(());
+            }
             // Prefer the Web API (does not raise the Spotify window); fall back to AppleScript.
             if let Ok(web) = web_client() {
                 let is_track = uri.starts_with("spotify:track:");
@@ -431,13 +461,13 @@ fn run_sub(sub: Sub) -> Result<()> {
             Command::PlayUri(uri)
         }
     };
-    spotify::osascript(&command_script(&cmd))?;
+    // Target the pinned service, else whichever player is active right now.
+    let service = match forced {
+        Some(s) => s,
+        None => player::poll()?.choose(Service::Spotify, None),
+    };
+    player::osascript(&player::script_for(service, &cmd))?;
     Ok(())
-}
-
-fn command_script(cmd: &Command) -> String {
-    // Re-use the backend's script builder.
-    spotify::script_for(cmd)
 }
 
 /// Append a line to the file named by `AURA_DEBUG`, if set.

@@ -1,6 +1,6 @@
 # aura
 
-A now-playing display for Spotify that lives in your terminal.
+A now-playing display for Spotify and Apple Music that lives in your terminal.
 
 <p align="center">
   <img src="docs/screens/demo.gif" alt="aura demo: search a song, play it, colors follow the album art" width="900">
@@ -10,6 +10,7 @@ A now-playing display for Spotify that lives in your terminal.
 - **Colors that follow the music.** The whole UI is themed from the album art: accents, gradients, text tones, and a blurred ambient backdrop. Colors cross-fade when the track changes.
 - **Synced lyrics** (via [LRCLIB](https://lrclib.net), no API key) that scroll with playback, with a nudge control when they run early or late.
 - **Zero setup on macOS.** No Spotify developer app, no OAuth, no Premium requirement. aura talks to the Spotify desktop app directly and gets track changes the instant they happen.
+- **Apple Music too.** The Music app is supported the same way: now playing, art, lyrics, favorites, and browsing your library and playlists, with nothing to configure. aura shows whichever app is playing; `x` switches.
 - **Full control.** Play/pause, next/previous, seek, volume, mute, shuffle, repeat, like. Keyboard and mouse.
 - **Search and browse.** Press `/` to search songs, artists, albums and playlists; `tab` for your playlists, liked songs, recent plays, top tracks and the queue. Play anything, or queue it.
 - **Three layouts plus a mini bar** that adapt to the window size, from a 2-line strip to a full-screen cover.
@@ -17,7 +18,7 @@ A now-playing display for Spotify that lives in your terminal.
 
 ## Install
 
-Requires macOS with the Spotify desktop app.
+Requires macOS with the Spotify desktop app and/or the Music app.
 
 ```bash
 brew install Zezoo123/tap/aura
@@ -46,7 +47,11 @@ Every screen is colored from whatever album is playing.
 | --- | --- |
 | ![lyrics layout](docs/screens/lyrics.png) | ![browser](docs/screens/browser.png) |
 
-## Search, playlists, liked songs
+## Apple Music
+
+Nothing to set up. If the Music app is playing, aura shows it; `x` switches players by hand, and `--service music` pins it. Press `/` to search your library, `tab` for playlists, favorites, recently added and most played. Songs play through the Music app in the background. Catalog search (songs you haven't added) isn't available: Apple only offers that through MusicKit, which needs a paid developer account.
+
+## Search, playlists, liked songs (Spotify)
 
 The now-playing display works with no setup at all. Search and browsing use Spotify's Web API, which needs a developer app on your account (Spotify's rule, not ours; since February 2026 it also requires Premium). It takes two minutes:
 
@@ -68,7 +73,8 @@ Inside the browser panel: `enter` plays a song or opens a playlist/album/artist,
 | --- | --- |
 | `/` | search |
 | `tab` | browse: playlists · liked · recent · top · queue |
-| `h` | ♥ like / unlike |
+| `h` | ♥ like / unlike (favorite in Apple Music) |
+| `x` | switch between Spotify and Apple Music |
 | `space` / `enter` | play · pause |
 | `n` / `p` | next · previous |
 | `←` `→` | seek 5s (`shift` for 15s) |
@@ -90,14 +96,15 @@ Mouse: click the progress bar to seek, scroll anywhere for volume, click the art
 ## Options
 
 ```
-aura [--layout cover|split|lyrics] [--protocol halfblocks|sixel|kitty|iterm2]
+aura [--service spotify|music] [--layout cover|split|lyrics] [--protocol halfblocks|sixel|kitty|iterm2]
      [--no-ambient] [--no-lyrics] [--lyrics-offset MS] [--fps N] [--poll-ms N]
 ```
 
 ## Scripting
 
 ```bash
-aura status            # JSON: state, position, volume, track metadata, artwork URL
+aura status            # JSON for the active player, plus both players under "players"
+aura --service music next   # every command accepts --service
 aura toggle | play | pause | next | prev
 aura seek 92.5         # seconds
 aura volume 40
@@ -109,7 +116,7 @@ aura devices           # JSON list of Spotify Connect devices (needs aura login)
 
 ## How it works
 
-Playback state comes from the Spotify app's scripting interface (JavaScript for Automation, one process per poll). Track and play-state changes arrive through a small Swift helper that subscribes to Spotify's `PlaybackStateChanged` notification, so the UI reacts immediately instead of waiting for the next poll. Artwork is fetched once per album and cached under `~/Library/Caches/aura`, along with lyrics lookups. Colors are extracted with a small k-means pass over the art; image resizing and encoding happen on a worker thread so the UI never stalls. Search and library data come from the Web API (PKCE OAuth, no client secret). Anything you pick plays through the Web API on the active device (or this Mac's Spotify app, launched hidden if needed), falling back to AppleScript only when the API refuses.
+Playback state comes from the Spotify and Music apps' scripting interfaces (JavaScript for Automation, one process per poll reads both). Track and play-state changes arrive through a small Swift helper that subscribes to both apps' playback notifications, so the UI reacts immediately instead of waiting for the next poll. Apple Music artwork is exported straight from the Music app; the library browser reads the whole library in a handful of batched calls and searches it locally. Artwork is fetched once per album and cached under `~/Library/Caches/aura`, along with lyrics lookups. Colors are extracted with a small k-means pass over the art; image resizing and encoding happen on a worker thread so the UI never stalls. Search and library data come from the Web API (PKCE OAuth, no client secret). Anything you pick plays through the Web API on the active device (or this Mac's Spotify app, launched hidden if needed), falling back to AppleScript only when the API refuses.
 
 ## Debugging
 

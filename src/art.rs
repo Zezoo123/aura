@@ -6,7 +6,10 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 use sha2::{Digest, Sha256};
 
-use crate::theme::{Ambient, Theme};
+use crate::{
+    player::ArtRef,
+    theme::{Ambient, Theme},
+};
 
 pub struct Art {
     pub image: DynamicImage,
@@ -39,8 +42,23 @@ pub fn fetch_bytes(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub fn load(agent: &ureq::Agent, url: &str) -> Result<Art> {
-    let bytes = fetch_bytes(agent, url)?;
+pub fn load(agent: &ureq::Agent, art: &ArtRef) -> Result<Art> {
+    let bytes = match art {
+        ArtRef::None => anyhow::bail!("no artwork"),
+        ArtRef::Url(url) => fetch_bytes(agent, url)?,
+        ArtRef::MusicTrack(pid) => {
+            let path = cache_path(&format!("music:{pid}"))?;
+            match fs::read(&path) {
+                Ok(b) if !b.is_empty() => b,
+                _ => {
+                    let tmp = path.with_extension("part");
+                    crate::music::export_artwork(pid, &tmp)?;
+                    fs::rename(&tmp, &path)?;
+                    fs::read(&path)?
+                }
+            }
+        }
+    };
     let image = image::load_from_memory(&bytes).context("decoding artwork")?;
     let theme = Theme::from_image(&image);
     let ambient = Ambient::from_image(&image, &theme);

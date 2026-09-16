@@ -15,7 +15,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     app::{Action, App, HelperStatus, HitAreas, Layout, LyricsStatus},
-    spotify::PlayerState,
+    player::{PlayerState, Service},
     theme::{Rgb, Theme},
 };
 
@@ -39,11 +39,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             draw_controls(buf, Rect::new(area.x, y + 1, area.width, 1), app, &theme);
         }
     } else if !app.snap.running {
-        draw_message(buf, area, &theme, "Spotify isn't running", "press enter to launch it · q to quit");
+        draw_header(buf, Rect::new(area.x, area.y, area.width, 1), app, &theme);
+        let big = format!("{} isn't running", app.active.app_name());
+        let small = format!("enter launches it · x switches to {} · q quits", app.active.other().name());
+        draw_message(buf, area, &theme, &big, &small);
         app.hit.buttons.push((area, Action::Launch));
     } else if app.snap.track.is_none() {
         draw_header(buf, Rect::new(area.x, area.y, area.width, 1), app, &theme);
-        draw_message(buf, area, &theme, "Nothing playing", "start something in Spotify and it shows up here");
+        let small = format!("start something in {} and it shows up here · x switches service", app.active.app_name());
+        draw_message(buf, area, &theme, "Nothing playing", &small);
     } else {
         match layout {
             Layout::Cover => draw_cover(buf, area, app, &theme),
@@ -199,6 +203,10 @@ fn draw_header(buf: &mut Buffer, r: Rect, app: &mut App, theme: &Theme) {
     }
     let mut x = r.x + 2;
     x += put(buf, x, r.y, "◉ aura", st(theme.accent).add_modifier(Modifier::BOLD), r.width);
+    let badge = format!("{} {}", app.active.glyph(), app.active.name());
+    let bw = put(buf, x + 2, r.y, &badge, st(theme.muted), r.width);
+    app.hit.buttons.push((Rect::new(x + 2, r.y, bw, 1), Action::SwitchService));
+    x += bw + 2;
     let (glyph, word) = match app.snap.state {
         PlayerState::Playing => ("▶", "playing"),
         PlayerState::Paused => ("❚❚", "paused"),
@@ -206,7 +214,7 @@ fn draw_header(buf: &mut Buffer, r: Rect, app: &mut App, theme: &Theme) {
     };
     x += put(buf, x + 2, r.y, glyph, st(theme.muted), r.width) + 2;
     x += put(buf, x + 1, r.y, word, st(theme.muted), r.width) + 1;
-    if app.web.is_some() {
+    if app.web.is_some() || app.active == Service::AppleMusic {
         let (heart, style) = match app.liked {
             Some(true) => ("♥", st(theme.accent)),
             Some(false) => ("♡", st(theme.dim)),
@@ -451,11 +459,11 @@ fn draw_meta(buf: &mut Buffer, r: Rect, app: &App, theme: &Theme) {
     line(buf, "popular", &format!("{pop_bar} {}", t.popularity), st(theme.muted));
     line(buf, "length", &fmt_time(t.duration_ms), st(theme.muted));
     let src = match app.helper {
-        HelperStatus::Live => "Spotify · live events",
-        HelperStatus::Polling => "Spotify · polling",
-        HelperStatus::Starting => "Spotify",
+        HelperStatus::Live => format!("{} · live events", app.active.name()),
+        HelperStatus::Polling => format!("{} · polling", app.active.name()),
+        HelperStatus::Starting => app.active.name().to_string(),
     };
-    line(buf, "source", src, st(theme.dim));
+    line(buf, "source", &src, st(theme.dim));
     let ly = match &app.lyrics_status {
         LyricsStatus::Idle => "off".to_string(),
         LyricsStatus::Loading => "searching…".to_string(),
@@ -617,7 +625,7 @@ fn draw_toast(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) {
 }
 
 fn draw_help(buf: &mut Buffer, area: Rect, theme: &Theme) {
-    let rows: [(&str, &str); 23] = [
+    let rows: [(&str, &str); 24] = [
         ("/", "search songs · artists · albums · playlists"),
         ("tab", "browse playlists · liked · recent · top · queue"),
         ("h", "♥ like / unlike"),
@@ -633,7 +641,8 @@ fn draw_help(buf: &mut Buffer, area: Rect, theme: &Theme) {
         ("b", "ambient backdrop"),
         ("v", "cycle layout"),
         ("1 2 3", "cover · split · lyrics"),
-        ("o", "bring Spotify to front"),
+        ("x", "switch Spotify · Apple Music"),
+        ("o", "bring the player to front"),
         ("y", "copy track link"),
         ("R", "reload art & lyrics"),
         ("?", "this help"),
@@ -894,8 +903,8 @@ pub fn draw_browser(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) 
 
     // ---- tabs
     let mut x = r.left() + 2;
-    for t in Tab::ALL {
-        let label = format!(" {} ", t.title());
+    for t in Tab::for_service(app.active) {
+        let label = format!(" {} ", t.title(app.active));
         let style = if t == app.browser.tab {
             Style::default().bg(theme.accent.color()).fg(theme.bg.color()).add_modifier(Modifier::BOLD)
         } else {
@@ -905,10 +914,11 @@ pub fn draw_browser(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) 
         app.hit.buttons.push((Rect::new(x, r.top(), wlab, 1), Action::OpenBrowser(Some(t))));
         x += wlab + 1;
     }
-    if let Some(name) = &app.me_name {
-        let s = format!(" {name} ");
-        put(buf, r.right().saturating_sub(2 + s.width() as u16), r.top(), &s, st(theme.dim), w);
-    }
+    let corner = match (app.active, &app.me_name) {
+        (Service::Spotify, Some(name)) => format!(" {name} "),
+        (s, _) => format!(" {} ", s.name()),
+    };
+    put(buf, r.right().saturating_sub(2 + corner.width() as u16), r.top(), &corner, st(theme.dim), w);
 
     let mut y = inner.y;
     // ---- search input
@@ -924,7 +934,8 @@ pub fn draw_browser(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) 
         let qx = field.x + 2;
         let qw = field.width.saturating_sub(2);
         if app.browser.query.is_empty() && !focused {
-            put(buf, qx, y, "type to search songs, artists, albums, playlists", Style::default().bg(bg.color()).fg(theme.dim.color()), qw);
+            let hint = if app.active == Service::AppleMusic { "type to search your library" } else { "type to search songs, artists, albums, playlists" };
+            put(buf, qx, y, hint, Style::default().bg(bg.color()).fg(theme.dim.color()), qw);
         } else {
             let shown = fit(&app.browser.query, qw.saturating_sub(1) as usize);
             put(buf, qx, y, &shown, Style::default().bg(bg.color()).fg(theme.text.color()), qw);
@@ -1039,6 +1050,7 @@ pub fn draw_browser(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) 
     // ---- footer
     let hint = match app.browser.tab {
         Tab::Search if app.browser.focus == Focus::Input => "enter search · ↓ results · tab switch · esc close",
+        _ if !app.active.caps().queue => "enter play · p play all · ← back · tab switch · esc close",
         _ => "enter play · a queue (stays here) · p play all · ← back · tab switch · esc close",
     };
     put(buf, inner.x, footer_y, &fit(hint, inner.width as usize), st(theme.dim), inner.width);

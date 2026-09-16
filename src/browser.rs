@@ -1,6 +1,7 @@
 //! The in-app browser: search, playlists, liked songs, recents and the queue.
 //! Pure state; rendering lives in ui.rs and side effects in app.rs.
 
+use crate::player::Service;
 use crate::web::{AlbumItem, ArtistItem, PlaylistItem, SearchResults, TrackItem};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,23 +16,30 @@ pub enum Tab {
 
 impl Tab {
     pub const ALL: [Tab; 6] = [Tab::Search, Tab::Playlists, Tab::Liked, Tab::Recent, Tab::Top, Tab::Queue];
-    pub fn title(self) -> &'static str {
+
+    /// Tabs available for a service.
+    pub fn for_service(s: Service) -> Vec<Tab> {
+        Tab::ALL.iter().copied().filter(|t| *t != Tab::Queue || s.caps().queue).collect()
+    }
+    pub fn title(self, s: Service) -> &'static str {
         match self {
             Tab::Search => "search",
             Tab::Playlists => "playlists",
             Tab::Liked => "liked",
-            Tab::Recent => "recent",
-            Tab::Top => "top",
+            Tab::Recent => s.caps().recent_label,
+            Tab::Top => s.caps().top_label,
             Tab::Queue => "queue",
         }
     }
-    pub fn next(self) -> Tab {
-        let i = Tab::ALL.iter().position(|t| *t == self).unwrap_or(0);
-        Tab::ALL[(i + 1) % Tab::ALL.len()]
+    pub fn next(self, s: Service) -> Tab {
+        let all = Tab::for_service(s);
+        let i = all.iter().position(|t| *t == self).unwrap_or(0);
+        all[(i + 1) % all.len()]
     }
-    pub fn prev(self) -> Tab {
-        let i = Tab::ALL.iter().position(|t| *t == self).unwrap_or(0);
-        Tab::ALL[(i + Tab::ALL.len() - 1) % Tab::ALL.len()]
+    pub fn prev(self, s: Service) -> Tab {
+        let all = Tab::for_service(s);
+        let i = all.iter().position(|t| *t == self).unwrap_or(0);
+        all[(i + all.len() - 1) % all.len()]
     }
 }
 

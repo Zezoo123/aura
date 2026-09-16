@@ -14,13 +14,15 @@ func emit(_ obj: [String: Any]) {
 }
 
 let dnc = DistributedNotificationCenter.default()
-dnc.addObserver(forName: NSNotification.Name("com.spotify.client.PlaybackStateChanged"),
-                object: nil, queue: nil) { note in
-    var obj: [String: Any] = ["event": "playback"]
-    if let info = note.userInfo {
-        for (k, v) in info { obj["\(k)"] = "\(v)" }
+for (name, app) in [("com.spotify.client.PlaybackStateChanged", "spotify"),
+                    ("com.apple.Music.playerInfo", "music")] {
+    dnc.addObserver(forName: NSNotification.Name(name), object: nil, queue: nil) { note in
+        var obj: [String: Any] = ["event": "playback", "app": app]
+        if let info = note.userInfo {
+            for (k, v) in info { obj["\(k)"] = "\(v)" }
+        }
+        emit(obj)
     }
-    emit(obj)
 }
 
 let ws = NSWorkspace.shared.notificationCenter
@@ -28,8 +30,8 @@ for (name, ev) in [(NSWorkspace.didLaunchApplicationNotification, "launched"),
                    (NSWorkspace.didTerminateApplicationNotification, "quit")] {
     ws.addObserver(forName: name, object: nil, queue: nil) { note in
         if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-           app.bundleIdentifier == "com.spotify.client" {
-            emit(["event": ev])
+           let bid = app.bundleIdentifier, bid == "com.spotify.client" || bid == "com.apple.Music" {
+            emit(["event": ev, "app": bid == "com.apple.Music" ? "music" : "spotify"])
         }
     }
 }
