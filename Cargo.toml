@@ -1,7 +1,7 @@
 [package]
 name = "aura"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "A gorgeous now-playing display for Spotify in your terminal: real album art, art-derived color themes, synced lyrics, and full playback control. Zero setup on macOS."
 license = "MIT"
 repository = "https://github.com/Zezoo123/aura"
