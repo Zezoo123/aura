@@ -28,6 +28,10 @@ I made this because every terminal Spotify thing I tried showed a tiny dithered 
 | --- | --- |
 | ![lyrics](docs/screens/lyrics.png) | ![browser](docs/screens/browser.png) |
 
+Without image support (here the default macOS Terminal) the cover falls back to half-blocks:
+
+![terminal.app](docs/screens/terminal-app.jpg)
+
 ## Install
 
 macOS only for now. You need the Spotify app and/or the Music app.
