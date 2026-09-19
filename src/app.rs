@@ -622,7 +622,16 @@ impl App {
 
     fn command(&mut self, cmd: Command) {
         self.last_cmd_at = Instant::now();
-        self.player.run(self.active, cmd);
+        let bundle = self.snap.app.as_ref().map(|(_, b)| b.clone()).unwrap_or_default();
+        self.player.run(self.active, cmd, &bundle);
+    }
+
+    /// Name to show for the active player ("Spotify", "Apple Music", or the app name).
+    pub fn player_label(&self) -> String {
+        match (&self.snap.app, self.active) {
+            (Some((name, _)), Service::System) if !name.is_empty() => name.clone(),
+            _ => self.active.name().to_string(),
+        }
     }
 
     // ----- input --------------------------------------------------------
@@ -700,7 +709,10 @@ impl App {
                 self.toast(format!("launching {}…", self.active.app_name()));
             }
             Action::SwitchService => {
-                let next = self.active.other();
+                let next = match &self.last_poll {
+                    Some(p) => p.next_running(self.active),
+                    None => self.active.next(),
+                };
                 self.forced = Some(next);
                 self.active = next;
                 self.needs_clear = true;
@@ -714,7 +726,8 @@ impl App {
                     self.apply_snapshot(Snapshot::not_running(next));
                 }
                 self.player.poke();
-                self.toast(format!("{} {}", next.glyph(), next.name()));
+                let label = self.player_label();
+                self.toast(format!("{} {}", next.glyph(), label));
             }
             Action::Refresh => {
                 self.player.poke();
@@ -764,6 +777,12 @@ impl App {
                     self.pending_volume = Some((0, Instant::now()));
                     self.toast("muted");
                 }
+            }
+            Action::Shuffle if !self.active.browsable() => {
+                self.toast("shuffle isn't controllable for this player");
+            }
+            Action::Repeat if !self.active.browsable() => {
+                self.toast("repeat isn't controllable for this player");
             }
             Action::Shuffle => {
                 let on = !self.snap.shuffle;
@@ -921,6 +940,10 @@ impl App {
     }
 
     fn toggle_like(&mut self) {
+        if !self.active.browsable() {
+            self.toast("liking isn't available for this player");
+            return;
+        }
         let Some(t) = self.snap.track.clone() else { return };
         let want = !self.liked.unwrap_or(false);
         if self.active == Service::AppleMusic {
@@ -945,6 +968,11 @@ impl App {
     }
 
     fn open_browser(&mut self, tab: Option<Tab>) {
+        if !self.active.browsable() {
+            let label = self.player_label();
+            self.toast(format!("no search for {label} · x switches player"));
+            return;
+        }
         if self.browser.open {
             if let Some(t) = tab {
                 self.switch_tab(t);
@@ -1263,7 +1291,7 @@ impl App {
                 if premium {
                     let _ = tx.send(Msg::Error("Spotify Premium is needed to start playback from here; using the desktop app instead".into()));
                 }
-                player.run(service, fallback);
+                player.run(service, fallback, "");
             } else {
                 // Give Spotify a moment to switch, then refresh the display.
                 thread::sleep(Duration::from_millis(350));

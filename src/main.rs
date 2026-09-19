@@ -9,6 +9,7 @@ mod lyrics;
 mod music;
 mod player;
 mod spotify;
+mod system;
 mod theme;
 mod ui;
 mod web;
@@ -41,7 +42,7 @@ struct Cli {
     #[command(subcommand)]
     cmd: Option<Sub>,
 
-    /// Pin the player to show (spotify | music). Default: whichever is playing.
+    /// Pin the player to show (spotify | music | system). Default: whichever is playing.
     #[arg(long, global = true)]
     service: Option<String>,
 
@@ -321,6 +322,7 @@ fn web_client() -> Result<web::WebApi> {
 fn snapshot_json(s: &player::Snapshot) -> serde_json::Value {
     serde_json::json!({
         "service": s.service.name(),
+        "app": s.app.as_ref().map(|(name, bundle)| serde_json::json!({"name": name, "bundle": bundle})),
         "running": s.running,
         "state": match s.state {
             PlayerState::Playing => "playing",
@@ -422,6 +424,7 @@ fn run_sub(sub: Sub, forced: Option<Service>) -> Result<()> {
             json["players"] = serde_json::json!({
                 "spotify": snapshot_json(&p.spotify),
                 "music": snapshot_json(&p.music),
+                "system": snapshot_json(&p.system),
             });
             println!("{}", serde_json::to_string_pretty(&json)?);
             return Ok(());
@@ -440,7 +443,7 @@ fn run_sub(sub: Sub, forced: Option<Service>) -> Result<()> {
         Sub::Open { uri } => {
             let uri = spotify::to_uri(&uri);
             if uri.starts_with("music:") {
-                player::osascript(&player::script_for(Service::AppleMusic, &Command::PlayUri(uri)))?;
+                player::script_for(Service::AppleMusic, &Command::PlayUri(uri), "").run()?;
                 return Ok(());
             }
             // Prefer the Web API (does not raise the Spotify window); fall back to AppleScript.
@@ -462,11 +465,10 @@ fn run_sub(sub: Sub, forced: Option<Service>) -> Result<()> {
         }
     };
     // Target the pinned service, else whichever player is active right now.
-    let service = match forced {
-        Some(s) => s,
-        None => player::poll()?.choose(Service::Spotify, None),
-    };
-    player::osascript(&player::script_for(service, &cmd))?;
+    let poll = player::poll()?;
+    let service = forced.unwrap_or_else(|| poll.choose(Service::Spotify, None));
+    let bundle = poll.get(service).app.as_ref().map(|(_, b)| b.clone()).unwrap_or_default();
+    player::script_for(service, &cmd, &bundle).run()?;
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 # aura
 
-Spotify and Apple Music in your terminal. Shows the album cover, picks the colors of the whole UI from it, and shows synced lyrics. You can search and play stuff from it too.
+Spotify, Apple Music, and whatever else is playing, in your terminal. Shows the album cover, picks the colors of the whole UI from it, and shows synced lyrics. You can search and play stuff from it too.
 
 <p align="center">
   <img src="docs/screens/demo.gif" alt="aura demo" width="900">
@@ -14,6 +14,7 @@ I made this because every terminal Spotify thing I tried showed a tiny dithered 
 - Every color in the UI comes from the cover. Each song looks different.
 - Synced lyrics from [LRCLIB](https://lrclib.net). No API key.
 - Reads state straight from the Spotify or Music desktop app, so the display needs no setup, no dev app, no Premium.
+- Anything else that shows up in macOS's Now Playing (Tidal, a YouTube tab, VLC...) works too: art, lyrics, play/pause/next/seek. No search for those.
 - Search, playlists, liked songs, recents, queue. Playing something never brings the Spotify window forward.
 - Four layouts depending on how big the window is, down to a 2-line strip.
 - Keyboard and mouse. `aura status` prints JSON if you want it in scripts.
@@ -52,7 +53,13 @@ First run: macOS asks if your terminal can control Spotify. Click Allow. If you 
 
 ## Apple Music
 
-Works out of the box. If Music is playing, aura shows it. `x` switches between the two, `--service music` pins it. `/` searches your library. Catalog search isn't possible without a paid Apple developer account, so it's library only.
+Works out of the box. If Music is playing, aura shows it. `x` cycles between players, `--service music` pins it. `/` searches your library. Catalog search isn't possible without a paid Apple developer account, so it's library only.
+
+## Everything else
+
+If some other app is playing (Tidal, Deezer, a browser tab, VLC, whatever reports to the macOS Now Playing widget), aura shows it with cover art looked up from the iTunes catalog, synced lyrics, and play/pause/next/seek/volume. Search, playlists, shuffle, repeat and likes only exist for Spotify and Apple Music. `--service system` pins this mode.
+
+This uses a private macOS framework through osascript. It works on macOS 15.4 through 26 as of this writing, but Apple could close it in an update. If it stops working, Spotify and Apple Music are unaffected.
 
 ## Spotify search and playlists
 
@@ -73,7 +80,7 @@ In the search panel: `enter` plays, `a` queues, `p` plays a whole playlist or al
 | `/` | search |
 | `tab` | playlists · liked · recent · top · queue |
 | `h` | like / unlike |
-| `x` | switch Spotify / Apple Music |
+| `x` | switch player |
 | `space` | play / pause |
 | `n` `p` | next / previous |
 | `←` `→` | seek 5s (shift: 15s) |
@@ -105,7 +112,7 @@ aura devices             # needs login
 aura --service music next
 ```
 
-Flags: `--service spotify|music`, `--layout cover|split|lyrics`, `--protocol halfblocks|sixel|kitty|iterm2`, `--no-ambient`, `--no-lyrics`, `--lyrics-offset MS`, `--fps N`.
+Flags: `--service spotify|music|system`, `--layout cover|split|lyrics`, `--protocol halfblocks|sixel|kitty|iterm2`, `--no-ambient`, `--no-lyrics`, `--lyrics-offset MS`, `--fps N`.
 
 ## How it works
 
@@ -115,7 +122,7 @@ Rust, ratatui. State comes from the Spotify and Music apps over their scripting 
 
 ## Plans
 
-Apple Music is in. Next is a mode that shows whatever is playing on the system (Tidal, YouTube in a browser, etc), then SoundCloud, then Linux.
+Next: SoundCloud, then Linux (MPRIS).
 
 ## About
 

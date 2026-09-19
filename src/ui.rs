@@ -40,8 +40,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     } else if !app.snap.running {
         draw_header(buf, Rect::new(area.x, area.y, area.width, 1), app, &theme);
-        let big = format!("{} isn't running", app.active.app_name());
-        let small = format!("enter launches it · x switches to {} · q quits", app.active.other().name());
+        let (big, small) = if app.active == Service::System {
+            ("Nothing is playing".to_string(), "play something in any app · x switches player · q quits".to_string())
+        } else {
+            (format!("{} isn't running", app.active.app_name()), "enter launches it · x switches player · q quits".to_string())
+        };
         draw_message(buf, area, &theme, &big, &small);
         app.hit.buttons.push((area, Action::Launch));
     } else if app.snap.track.is_none() {
@@ -203,7 +206,7 @@ fn draw_header(buf: &mut Buffer, r: Rect, app: &mut App, theme: &Theme) {
     }
     let mut x = r.x + 2;
     x += put(buf, x, r.y, "◉ aura", st(theme.accent).add_modifier(Modifier::BOLD), r.width);
-    let badge = format!("{} {}", app.active.glyph(), app.active.name());
+    let badge = format!("{} {}", app.active.glyph(), app.player_label());
     let bw = put(buf, x + 2, r.y, &badge, st(theme.muted), r.width);
     app.hit.buttons.push((Rect::new(x + 2, r.y, bw, 1), Action::SwitchService));
     x += bw + 2;
@@ -458,10 +461,11 @@ fn draw_meta(buf: &mut Buffer, r: Rect, app: &App, theme: &Theme) {
     let pop_bar: String = (0..10).map(|i| if i < pop { '●' } else { '○' }).collect();
     line(buf, "popular", &format!("{pop_bar} {}", t.popularity), st(theme.muted));
     line(buf, "length", &fmt_time(t.duration_ms), st(theme.muted));
-    let src = match app.helper {
-        HelperStatus::Live => format!("{} · live events", app.active.name()),
-        HelperStatus::Polling => format!("{} · polling", app.active.name()),
-        HelperStatus::Starting => app.active.name().to_string(),
+    let src = match (app.active, app.helper) {
+        (Service::System, _) => format!("{} · macOS now playing", app.player_label()),
+        (_, HelperStatus::Live) => format!("{} · live events", app.active.name()),
+        (_, HelperStatus::Polling) => format!("{} · polling", app.active.name()),
+        (_, HelperStatus::Starting) => app.active.name().to_string(),
     };
     line(buf, "source", &src, st(theme.dim));
     let ly = match &app.lyrics_status {
@@ -645,7 +649,7 @@ fn draw_help(buf: &mut Buffer, area: Rect, theme: &Theme) {
         ("b", "ambient backdrop"),
         ("v", "cycle layout"),
         ("1 2 3", "cover · split · lyrics"),
-        ("x", "switch Spotify · Apple Music"),
+        ("x", "switch player (Spotify · Apple Music · system)"),
         ("o", "bring the player to front"),
         ("y", "copy track link"),
         ("R", "reload art & lyrics"),

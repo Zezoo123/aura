@@ -14,12 +14,14 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::{app::Msg, music, spotify};
+use crate::{app::Msg, music, spotify, system};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Service {
     Spotify,
     AppleMusic,
+    /// Whatever app macOS reports as "Now Playing".
+    System,
 }
 
 /// What a service can do beyond now-playing and transport control.
@@ -35,42 +37,49 @@ pub struct Caps {
 }
 
 impl Service {
-    pub const ALL: [Service; 2] = [Service::Spotify, Service::AppleMusic];
+    pub const ALL: [Service; 3] = [Service::Spotify, Service::AppleMusic, Service::System];
 
     pub fn name(self) -> &'static str {
         match self {
             Service::Spotify => "Spotify",
             Service::AppleMusic => "Apple Music",
+            Service::System => "System",
         }
     }
     pub fn app_name(self) -> &'static str {
         match self {
             Service::Spotify => "Spotify",
             Service::AppleMusic => "Music",
+            Service::System => "the player",
         }
     }
     pub fn glyph(self) -> &'static str {
         match self {
             Service::Spotify => "●",
             Service::AppleMusic => "",
+            Service::System => "◇",
         }
     }
-    pub fn other(self) -> Service {
-        match self {
-            Service::Spotify => Service::AppleMusic,
-            Service::AppleMusic => Service::Spotify,
-        }
+    pub fn next(self) -> Service {
+        let i = Service::ALL.iter().position(|s| *s == self).unwrap_or(0);
+        Service::ALL[(i + 1) % Service::ALL.len()]
+    }
+    /// Whether the service has a browser (search / playlists) at all.
+    pub fn browsable(self) -> bool {
+        self != Service::System
     }
     pub fn caps(self) -> Caps {
         match self {
             Service::Spotify => Caps { needs_web: true, queue: true, recent_label: "recent", top_label: "top" },
             Service::AppleMusic => Caps { needs_web: false, queue: false, recent_label: "added", top_label: "most played" },
+            Service::System => Caps { needs_web: false, queue: false, recent_label: "recent", top_label: "top" },
         }
     }
     pub fn parse(s: &str) -> Option<Service> {
         match s.to_lowercase().as_str() {
             "spotify" => Some(Service::Spotify),
             "music" | "apple" | "applemusic" | "apple-music" | "apple_music" => Some(Service::AppleMusic),
+            "system" | "any" | "auto-any" | "mediaremote" => Some(Service::System),
             _ => None,
         }
     }
@@ -90,6 +99,8 @@ pub enum ArtRef {
     Url(String),
     /// Exported from Music.app by persistent ID.
     MusicTrack(String),
+    /// Looked up by metadata (iTunes Search) when the player gives no artwork.
+    Lookup { artist: String, title: String, album: String },
 }
 
 impl ArtRef {
@@ -99,6 +110,7 @@ impl ArtRef {
             ArtRef::None => None,
             ArtRef::Url(u) => Some(u.clone()),
             ArtRef::MusicTrack(id) => Some(format!("music:{id}")),
+            ArtRef::Lookup { artist, title, album } => Some(format!("lookup:{}\u{1f}{}\u{1f}{}", artist.to_lowercase(), title.to_lowercase(), album.to_lowercase())),
         }
     }
 }
@@ -123,6 +135,8 @@ pub struct Track {
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub service: Service,
+    /// For the system player: the app reporting to Now Playing (name, bundle id).
+    pub app: Option<(String, String)>,
     pub running: bool,
     pub state: PlayerState,
     pub position_ms: u64,
@@ -137,6 +151,7 @@ impl Snapshot {
     pub fn not_running(service: Service) -> Self {
         Snapshot {
             service,
+            app: None,
             running: false,
             state: PlayerState::Stopped,
             position_ms: 0,
@@ -154,6 +169,7 @@ impl Snapshot {
 pub struct PollResult {
     pub spotify: Snapshot,
     pub music: Snapshot,
+    pub system: Snapshot,
     pub taken_at: Instant,
 }
 
@@ -162,7 +178,20 @@ impl PollResult {
         match s {
             Service::Spotify => &self.spotify,
             Service::AppleMusic => &self.music,
+            Service::System => &self.system,
         }
+    }
+
+    /// The next service after `current` that is actually running (cycles).
+    pub fn next_running(&self, current: Service) -> Service {
+        let mut s = current.next();
+        for _ in 0..Service::ALL.len() {
+            if self.get(s).running {
+                return s;
+            }
+            s = s.next();
+        }
+        current.next()
     }
 
     /// Which player should be shown, given an optional user override and the
@@ -211,10 +240,29 @@ pub enum Command {
     Activate,
 }
 
-pub fn script_for(service: Service, cmd: &Command) -> String {
+/// A script to hand to osascript, in either language.
+pub struct Script {
+    pub text: String,
+    pub javascript: bool,
+}
+
+impl Script {
+    pub fn applescript(text: String) -> Script {
+        Script { text, javascript: false }
+    }
+    pub fn jxa(text: String) -> Script {
+        Script { text, javascript: true }
+    }
+    pub fn run(&self) -> Result<String> {
+        run_osascript(&self.text, self.javascript)
+    }
+}
+
+pub fn script_for(service: Service, cmd: &Command, bundle: &str) -> Script {
     match service {
-        Service::Spotify => spotify::script(cmd),
-        Service::AppleMusic => music::script(cmd),
+        Service::Spotify => Script::applescript(spotify::script(cmd)),
+        Service::AppleMusic => Script::applescript(music::script(cmd)),
+        Service::System => system::script(cmd, bundle),
     }
 }
 
@@ -248,7 +296,7 @@ fn run_osascript(script: &str, javascript: bool) -> Result<String> {
 
 /// One JXA process reads both players. Referencing an application object does not
 /// launch it; `running()` is checked first.
-const STATE_SCRIPT: &str = r#"
+const STATE_SCRIPT_HEAD: &str = r#"ObjC.import('Foundation');
 function run() {
   const out = {};
   const s = Application('Spotify');
@@ -287,9 +335,16 @@ function run() {
     } catch (e) {}
     out.music = o;
   }
+"#;
+
+const STATE_SCRIPT_TAIL: &str = r#"
   return JSON.stringify(out);
 }
 "#;
+
+fn state_script() -> String {
+    format!("{STATE_SCRIPT_HEAD}{}{STATE_SCRIPT_TAIL}", system::POLL_SNIPPET)
+}
 
 #[derive(serde::Deserialize, Default)]
 struct RawState {
@@ -334,17 +389,41 @@ struct RawTrack {
 }
 
 #[derive(serde::Deserialize, Default)]
+struct RawSystem {
+    #[serde(default)]
+    bundle: String,
+    #[serde(default)]
+    app: String,
+    #[serde(default)]
+    playing: bool,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    artist: Option<String>,
+    #[serde(default)]
+    album: Option<String>,
+    #[serde(default)]
+    duration: Option<f64>,
+    #[serde(default)]
+    position: Option<f64>,
+    #[serde(default)]
+    volume: Option<f64>,
+}
+
+#[derive(serde::Deserialize, Default)]
 struct RawPoll {
     #[serde(default)]
     spotify: Option<RawState>,
     #[serde(default)]
     music: Option<RawState>,
+    #[serde(default)]
+    system: Option<RawSystem>,
 }
 
 /// Read every player's state once.
 pub fn poll() -> Result<PollResult> {
     let taken_at = Instant::now();
-    let raw = jxa(STATE_SCRIPT)?;
+    let raw = jxa(&state_script())?;
     parse_poll(&raw, taken_at)
 }
 
@@ -353,8 +432,49 @@ fn parse_poll(raw: &str, taken_at: Instant) -> Result<PollResult> {
     Ok(PollResult {
         spotify: r.spotify.map(|s| to_snapshot(Service::Spotify, s, taken_at)).unwrap_or_else(|| Snapshot::not_running(Service::Spotify)),
         music: r.music.map(|s| to_snapshot(Service::AppleMusic, s, taken_at)).unwrap_or_else(|| Snapshot::not_running(Service::AppleMusic)),
+        system: r
+            .system
+            .filter(|s| !system::is_native(&s.bundle) && s.title.as_deref().map(|t| !t.is_empty()).unwrap_or(false))
+            .map(|s| system_snapshot(s, taken_at))
+            .unwrap_or_else(|| Snapshot::not_running(Service::System)),
         taken_at,
     })
+}
+
+fn system_snapshot(r: RawSystem, taken_at: Instant) -> Snapshot {
+    let title = r.title.unwrap_or_default();
+    let artist = r.artist.unwrap_or_default();
+    let album = r.album.unwrap_or_default();
+    let art = if title.is_empty() {
+        ArtRef::None
+    } else {
+        ArtRef::Lookup { artist: artist.clone(), title: title.clone(), album: album.clone() }
+    };
+    let track = Track {
+        id: format!("sys:{}:{}\u{1f}{}\u{1f}{}", r.bundle, title, artist, album),
+        name: title,
+        artist: artist.clone(),
+        album,
+        album_artist: artist,
+        duration_ms: (r.duration.unwrap_or(0.0).max(0.0) * 1000.0) as u64,
+        art,
+        track_number: 0,
+        popularity: 0,
+        liked: None,
+        url: None,
+    };
+    Snapshot {
+        service: Service::System,
+        app: Some((r.app, r.bundle)),
+        running: true,
+        state: if r.playing { PlayerState::Playing } else { PlayerState::Paused },
+        position_ms: (r.position.unwrap_or(0.0).max(0.0) * 1000.0) as u64,
+        taken_at,
+        volume: r.volume.unwrap_or(0.0).clamp(0.0, 100.0) as u8,
+        shuffle: false,
+        repeat: false,
+        track: Some(track),
+    }
 }
 
 fn to_snapshot(service: Service, r: RawState, taken_at: Instant) -> Snapshot {
@@ -375,6 +495,7 @@ fn to_snapshot(service: Service, r: RawState, taken_at: Instant) -> Snapshot {
                 None,
                 t.favorited,
             ),
+            Service::System => (ArtRef::None, None, None),
         };
         Track {
             id: t.id,
@@ -392,6 +513,7 @@ fn to_snapshot(service: Service, r: RawState, taken_at: Instant) -> Snapshot {
     });
     Snapshot {
         service,
+        app: None,
         running: true,
         state,
         position_ms: (r.position.unwrap_or(0.0).max(0.0) * 1000.0) as u64,
@@ -405,7 +527,7 @@ fn to_snapshot(service: Service, r: RawState, taken_at: Instant) -> Snapshot {
 
 enum Job {
     Poll,
-    Run(Service, Command),
+    Run(Service, Command, String),
 }
 
 /// Handle to the background worker.
@@ -435,8 +557,8 @@ impl Player {
                         Err(mpsc::RecvTimeoutError::Timeout) => Job::Poll,
                         Err(mpsc::RecvTimeoutError::Disconnected) => return,
                     };
-                    if let Job::Run(service, cmd) = job {
-                        if let Err(e) = osascript(&script_for(service, &cmd)) {
+                    if let Job::Run(service, cmd, bundle) = job {
+                        if let Err(e) = script_for(service, &cmd, &bundle).run() {
                             let _ = out_poll.send(Msg::Error(format!("{e:#}")));
                         }
                         let _ = out_poll.send(Msg::CommandDone);
@@ -473,8 +595,8 @@ impl Player {
         handle
     }
 
-    pub fn run(&self, service: Service, cmd: Command) {
-        let _ = self.tx.send(Job::Run(service, cmd));
+    pub fn run(&self, service: Service, cmd: Command, bundle: &str) {
+        let _ = self.tx.send(Job::Run(service, cmd, bundle.to_string()));
     }
 
     pub fn poke(&self) {
@@ -594,7 +716,15 @@ mod tests {
         let nulls = parse_poll(r#"{"music":{"state":"stopped","position":null,"volume":null}}"#, Instant::now()).unwrap();
         assert!(nulls.music.running && nulls.music.track.is_none());
         let none = parse_poll("{}", Instant::now()).unwrap();
-        assert!(!none.spotify.running && !none.music.running);
+        assert!(!none.spotify.running && !none.music.running && !none.system.running);
+        let sys = parse_poll(r#"{"system":{"bundle":"com.tidal.desktop","app":"TIDAL","playing":true,"title":"T","artist":"A","album":"B","duration":200,"position":12.5,"volume":50}}"#, Instant::now()).unwrap();
+        assert!(sys.system.running);
+        assert_eq!(sys.system.state, PlayerState::Playing);
+        assert_eq!(sys.system.app.as_ref().unwrap().0, "TIDAL");
+        assert!(matches!(sys.system.track.as_ref().unwrap().art, ArtRef::Lookup { .. }));
+        // Spotify reporting to Now Playing is covered by its own backend.
+        let native = parse_poll(r#"{"system":{"bundle":"com.spotify.client","app":"Spotify","playing":true,"title":"T"}}"#, Instant::now()).unwrap();
+        assert!(!native.system.running);
     }
 
     #[test]
@@ -608,5 +738,7 @@ mod tests {
         p.spotify.running = true;
         p.spotify.state = PlayerState::Playing;
         assert_eq!(p.choose(Service::Spotify, None), Service::Spotify);
+        assert_eq!(p.next_running(Service::Spotify), Service::AppleMusic);
+        assert_eq!(p.next_running(Service::AppleMusic), Service::Spotify);
     }
 }
