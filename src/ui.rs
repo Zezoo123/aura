@@ -570,7 +570,11 @@ fn draw_lyrics(buf: &mut Buffer, r: Rect, app: &App, theme: &Theme, centered: bo
         let f = s - i0 as f32;
         first_row_of[i0] as f32 + (first_row_of[i1] as f32 - first_row_of[i0] as f32) * f
     };
-    let top_row = row_pos.round() as i64 - (r.height as i64 / 2);
+    let mut top_row = row_pos.round() as i64 - (r.height as i64 / 2);
+    // Never start the viewport in the middle of a wrapped lyric line.
+    while top_row > 0 && (top_row as usize) < rows.len() && rows[top_row as usize].0 == rows[top_row as usize - 1].0 {
+        top_row -= 1;
+    }
 
     for screen in 0..r.height as i64 {
         let ri = top_row + screen;
